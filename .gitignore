@@ -1,11 +1,9 @@
 .eunit
-config/sys.config.example
 *.swo
 *.swp
 .erlang.mk/
 *.d
 cert/
-config/sys.config
 _rel/
 deps
 *.o
