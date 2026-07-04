@@ -294,4 +294,17 @@ request_push_type_overrides_default_test() ->
   Headers = add_apns_push_type(add_apns_id(maps:merge(Defaults, Request))),
   ?assertEqual(alert, maps:get(apns_push_type, Headers)).
 
+production_host_test() ->
+  ?assertEqual("api.push.apple.com", host(#{environment => production})).
+
+development_host_test() ->
+  ?assertEqual("api.sandbox.push.apple.com", host(#{environment => development})).
+
+token_keyfile_config_test() ->
+  {ok, State, {continue, connect}} = init([
+    {env, production},
+    {token_keyfile, "AuthKey_TEST.p8"}
+  ]),
+  ?assertEqual("AuthKey_TEST.p8", maps:get(keyfile, State)).
+
 -endif.

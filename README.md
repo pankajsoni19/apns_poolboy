@@ -1,7 +1,7 @@
 
 # Apns Erlang
 
-Provider for Apple Push Notificaion services (APNs). Uses poolboy for groups of connection pools to apns.
+Provider for Apple Push Notification service (APNs). Uses poolboy for groups of APNs connection pools.
 
 PR's welcome.
 
@@ -12,10 +12,11 @@ PR's welcome.
 
 ### Add to project
 
-You can use `apns_poolboy` as a dependency in your rebar.config:
+You can use `apns_poolboy` as a dependency in your rebar.config. The `1.0.0`
+tag contains an authentication configuration bug and must not be used:
 
     {deps , [
-        {apns_poolboy, ".*", {git, "https://github.com/pankajsoni19/apns_poolboy", {tag, "1.0.0"}}}
+        {apns_poolboy, ".*", {git, "https://github.com/pankajsoni19/apns_poolboy", {branch, "master"}}}
     ]}.
 
 ### Configure
@@ -40,12 +41,9 @@ In your sys.config file, add `apns` block.
                     {request_timeout,  5000},
 
                     {headers, [
-                        {apns_id, "val"},
-                        {apns_expiration, 1747322684},
                         {apns_priority, 10},
                         {apns_topic, "mytopic.com"},
-                        {apns_push_type, alert},
-                        {apns_collapse_id, "collapse-key"}
+                        {apns_push_type, alert}
                     ]}
                 ]
             }
@@ -63,12 +61,9 @@ apns_poolboy:push(pool_name,
     #{
         device_id    => <<"device_id">>,
         headers     => #{
-            apns_id             => <<"uuid">>,
-            apns_expiration     => 1747322684,
             apns_priority       => 10,
             apns_topic          => <<"app bundle id">>,
-            apns_push_type      => alert,
-            apns_collapse_id    => <<"collapse-key">>
+            apns_push_type      => alert
         },
         payload     => #{
             aps     => #{
@@ -78,12 +73,16 @@ apns_poolboy:push(pool_name,
             }
         }
     }).
-= apns:push_notification(ProcName, DeviceId, payload(), default_headers()).
 
 Status      -> integer()
 Headers     -> #{ apns_id := binary(), apns_unique_id := binary() | undefined}
 Response    -> no_body | #{ reason := binary() }
 ```
+
+Set `env` to `production` for App Store/TestFlight builds and use a production
+device token. Sandbox and production device tokens are not interchangeable.
+Only set `apns_expiration` when needed, and calculate it as a future Unix
+timestamp; an expired value may be accepted by APNs but not delivered.
 
 For `status` & `reason` definitions check [Apns Status Response Codes](https://developer.apple.com/documentation/usernotifications/handling-notification-responses-from-apns)
 
