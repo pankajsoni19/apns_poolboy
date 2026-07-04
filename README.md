@@ -37,6 +37,7 @@ In your sys.config file, add `apns` block.
                     {token_keyfile,    "p8 file path"},
                     {token_kid,        "team_kid"},
                     {team_id,          "team_id"},
+                    {request_timeout,  5000},
 
                     {headers, [
                         {apns_id, "val"},

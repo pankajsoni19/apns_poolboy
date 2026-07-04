@@ -19,4 +19,4 @@ child_spec(PoolName, PoolArgs, ApnsArgs) ->
 push(PoolName, Payload) ->
     poolboy:transaction(PoolName, fun(ApnsConn) ->
         apns:push(ApnsConn, Payload)
-    end).
+    end, infinity).

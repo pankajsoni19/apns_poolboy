@@ -6,8 +6,8 @@ app:: rebar.config
 LOCAL_DEPS = inets sasl
 DEPS = gun lager uuid poolboy jwt
 dep_lager = git https://github.com/erlang-lager/lager 3.9.2
-dep_gun = git https://github.com/ninenines/gun.git 2.2.0
-dep_uuid = git https://github.com/okeuday/uuid.git v2.0.2
+dep_gun = git https://github.com/ninenines/gun.git 2.4.1
+dep_uuid = git https://github.com/okeuday/uuid.git v2.0.7.1
 dep_poolboy = git https://github.com/devinus/poolboy.git 1.5.2
 dep_jwt = git https://github.com/artemeff/jwt.git 0.1.11
 

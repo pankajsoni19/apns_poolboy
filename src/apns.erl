@@ -29,7 +29,7 @@
 % api
 % --------------------
 push(Pid, Input) ->
-  gen_server:call(Pid, {push, Input}).
+  gen_server:call(Pid, {push, Input}, infinity).
 
 % --------------------
 % gen_server
@@ -38,12 +38,13 @@ start_link(Args) ->
     gen_server:start_link(?MODULE, Args, []).
 
 init(Opts) ->
-   process_flag(trap_exit, true),
+  process_flag(trap_exit, true),
   Env = proplists:get_value(env, Opts, development),
-  Keyfile = proplists:get_value(env, Opts, token_keyfile),
-  KeyId = erlang:list_to_binary(proplists:get_value(token_kid, Opts, "")),
-  TeamId = erlang:list_to_binary(proplists:get_value(team_id, Opts, "")),
+  Keyfile = proplists:get_value(token_keyfile, Opts),
+  KeyId = to_binary(proplists:get_value(token_kid, Opts, "")),
+  TeamId = to_binary(proplists:get_value(team_id, Opts, "")),
   Feedback = proplists:get_value(feedback, Opts, undefined),
+  RequestTimeout = proplists:get_value(request_timeout, Opts, 5000),
 
   Headers0 = proplists:get_value(headers, Opts, []),
 
@@ -55,6 +56,7 @@ init(Opts) ->
     keyid       => KeyId,
     teamid      => TeamId,
     feedback    => Feedback,
+    request_timeout => RequestTimeout,
     connected   => false,
     headers     => Headers1,
     jwt         => undefined
@@ -80,9 +82,12 @@ handle_continue(connect, State0) ->
       max_concurrent_streams  => 1
     },
     tls_opts          => [
-      {server_name_indication, disable},
-      {crl_check, false},
-      {verify, verify_none}
+      {server_name_indication, Host},
+      {verify, verify_peer},
+      {cacerts, public_key:cacerts_get()},
+      {customize_hostname_check, [
+        {match_fun, public_key:pkix_verify_hostname_match_fun(https)}
+      ]}
     ]
   }),
   MRef = monitor(process, ConnPid),
@@ -127,7 +132,8 @@ handle_call({push, Input}, _From, #{
     conn      := ConnPid,
     headers   := DefHeaders,
     monitor   := MRef,
-    jwt       := Token
+    jwt       := Token,
+    request_timeout := RequestTimeout
   } = State) ->
   
     #{
@@ -137,38 +143,40 @@ handle_call({push, Input}, _From, #{
   } = Input,
 
 
-  Headers1 = add_apns_push_type(add_apns_id(Headers0)),
-  Headers2 = maps:map(fun(_K, V) -> to_binary(V) end, Headers1),
-  Headers3 = maps:merge(DefHeaders, Headers2),
+  Headers1 = maps:merge(DefHeaders, Headers0),
+  Headers2 = add_apns_push_type(add_apns_id(Headers1)),
+  Headers3 = maps:map(fun(_K, V) -> to_binary(V) end, Headers2),
   WHeaders0 = wire_headers(Headers3),
 
   WHeaders1 = WHeaders0#{
-    <<"authorization">>   => <<"bearer ", Token/binary>>
+    <<"authorization">> => <<"bearer ", Token/binary>>,
+    <<"content-type">>  => <<"application/json">>
   },
 
   Path = get_device_path(DeviceId),
 
   StreamRef = gun:post(ConnPid, Path, WHeaders1, jsx:encode(Payload)),
   
-  case wait_for_response(ConnPid, StreamRef, MRef) of
+  case wait_for_response(ConnPid, StreamRef, MRef, RequestTimeout) of
     {ok, _} = OK ->
       {reply, OK, State};
-    {error, _} = Err ->
-      {stop, Err, retry, State}
+    {error, _} ->
+      gun:cancel(ConnPid, StreamRef),
+      {reply, retry, State}
   end;
 handle_call(Request, _From, State) ->
   ?INFO_MSG("~p, handle_call unhandled: ~p~n", [?MODULE, Request]),
-  {noreply, State}.
+  {reply, {error, {unsupported_call, Request}}, State}.
 % --------------------
 % internal
 % --------------------
 
-wait_for_response(ConnPid, StreamRef, MRef) ->
-  case gun:await(ConnPid, StreamRef, 5000, MRef) of
+wait_for_response(ConnPid, StreamRef, MRef, Timeout) ->
+  case gun:await(ConnPid, StreamRef, Timeout, MRef) of
     {response, fin, Status, Headers} -> 
         process_response(Status, Headers, no_body);
     {response, nofin, Status, Headers} ->
-        case gun:await_body(ConnPid, StreamRef, 5000, MRef) of
+        case gun:await_body(ConnPid, StreamRef, Timeout, MRef) of
           {ok, Body} -> process_response(Status, Headers, Body);
           {error, _} = E -> E
           end;      
@@ -177,8 +185,25 @@ wait_for_response(ConnPid, StreamRef, MRef) ->
 
 parse_body(no_body) -> no_body;
 parse_body(Body) when is_binary(Body) andalso (Body /= <<"">>) ->
-  jsx:decode(Body, [return_maps, {labels, atom}]);
+  try jsx:decode(Body, [return_maps]) of
+    Decoded when is_map(Decoded) ->
+      normalize_response_body(Decoded);
+    Decoded ->
+      #{raw_body => Body, decoded_body => Decoded}
+  catch
+    _:_ -> #{raw_body => Body}
+  end;
 parse_body(_) -> no_body.
+
+normalize_response_body(Body0) ->
+  Body1 = case maps:take(<<"reason">>, Body0) of
+    {Reason, Rest1} -> Rest1#{reason => Reason};
+    error -> Body0
+  end,
+  case maps:take(<<"timestamp">>, Body1) of
+    {Timestamp, Rest2} -> Rest2#{timestamp => Timestamp};
+    error -> Body1
+  end.
 
 parse_headers(Headers) ->
   M0 = maps:from_list(Headers),
@@ -245,3 +270,28 @@ to_binary(I) when is_integer(I) -> integer_to_binary(I);
 to_binary(L) when is_list(L) -> list_to_binary(L);
 to_binary(A) when is_atom(A) -> atom_to_binary(A);
 to_binary(B) -> B.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+malformed_response_body_test() ->
+  ?assertEqual(#{raw_body => <<"not json">>}, parse_body(<<"not json">>)).
+
+response_body_keys_test() ->
+  ?assertEqual(
+    #{reason => <<"BadDeviceToken">>, timestamp => 123},
+    parse_body(<<"{\"reason\":\"BadDeviceToken\",\"timestamp\":123}">>)
+  ).
+
+default_push_type_is_preserved_test() ->
+  Defaults = #{apns_push_type => <<"background">>},
+  Headers = add_apns_push_type(add_apns_id(maps:merge(Defaults, #{}))),
+  ?assertEqual(<<"background">>, maps:get(apns_push_type, Headers)).
+
+request_push_type_overrides_default_test() ->
+  Defaults = #{apns_push_type => <<"background">>},
+  Request = #{apns_push_type => alert},
+  Headers = add_apns_push_type(add_apns_id(maps:merge(Defaults, Request))),
+  ?assertEqual(alert, maps:get(apns_push_type, Headers)).
+
+-endif.
